@@ -2,7 +2,7 @@
 
 end-to-end ML project: scrape live bike-sharing data, build a feature pipeline, train a demand forecast model, and serve predictions through a live API and map dashboard.
 
-**live demo**: *coming soon*
+**live demo**: [nextbike-prague-demand-forecasting.streamlit.app](https://nextbike-prague-demand-forecasting.streamlit.app/)
 
 ## stack
 
