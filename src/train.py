@@ -17,7 +17,7 @@ import mlflow
 import numpy as np
 import pandas as pd
 
-FEATURE_COLS_FILE = "data/feature_cols.json"
+FEATURE_COLS_FILE = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
 
 # same params as production model (from notebook 03)
 _LGB_PARAMS = {
@@ -73,7 +73,8 @@ def train(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    mlflow.set_tracking_uri("mlruns")
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "mlruns"))
+    mlflow.set_experiment("nextbike_retrain")   # creates experiment dir if first run
     with mlflow.start_run(run_name=mlflow_run_name or "train_candidate"):
         mlflow.log_params({**_LGB_PARAMS, "train_rows": len(train_df), "val_rows": len(val_df)})
 

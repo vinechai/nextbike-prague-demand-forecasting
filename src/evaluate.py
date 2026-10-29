@@ -11,12 +11,13 @@ usage:
 
 import argparse
 import json
+import os
 
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-FEATURE_COLS_FILE = "data/feature_cols.json"
+FEATURE_COLS_FILE = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
 
 
 def _load_cols() -> list[str]:

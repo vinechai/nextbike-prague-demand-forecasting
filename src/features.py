@@ -103,15 +103,13 @@ def _add_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
-    """explicit time-offset merge so gaps don't shift the lag incorrectly."""
+    """time-offset lags via timestamp merge — NULL when hour is missing (handles scraper gaps)."""
     df = df.sort_values(["station_uid", "hour_local"])
     for col, offset_h in _LAG_OFFSETS.items():
         shifted = df[["station_uid", "hour_local", "avg_available"]].copy()
         shifted["hour_local"] = shifted["hour_local"] + timedelta(hours=offset_h)
         shifted = shifted.rename(columns={"avg_available": col})
         df = df.merge(shifted, on=["station_uid", "hour_local"], how="left")
-
-    # lag_24h_ratio: (current - lag_24h) / (lag_24h + 1)
     with np.errstate(invalid="ignore"):
         df["lag_24h_ratio"] = (df["avg_available"] - df["lag_24h"]) / (df["lag_24h"] + 1)
     return df
