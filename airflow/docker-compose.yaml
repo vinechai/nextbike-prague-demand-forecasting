@@ -1,0 +1,91 @@
+# standalone Airflow stack for the nextbike retrain pipeline
+# runs LocalExecutor — one postgres for airflow metadata (port 5433)
+# the nextbike data postgres (port 5432) is a separate service started by ../docker-compose.yml
+#
+# setup:
+#   cp .env.example .env
+#   docker compose up airflow-init   # first run only
+#   docker compose up -d
+#   open http://localhost:8080  (admin / admin)
+
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: airflow/Dockerfile
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://${_AIRFLOW_DB_USER:-airflow}:${_AIRFLOW_DB_PASS:-airflow}@af-postgres/${_AIRFLOW_DB_NAME:-airflow}
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+    # nextbike db — passed through to DAG tasks via env vars
+    DB_HOST: ${NEXTBIKE_DB_HOST:-host.docker.internal}
+    DB_PORT: ${NEXTBIKE_DB_PORT:-5432}
+    DB_USER: ${NEXTBIKE_DB_USER:-nextbike}
+    DB_PASS: ${NEXTBIKE_DB_PASS:-nextbike}
+    DB_NAME: ${NEXTBIKE_DB_NAME:-nextbike}
+    TRAIN_SINCE: ${TRAIN_SINCE:-2026-04-01}
+    TRAIN_UNTIL: ${TRAIN_UNTIL:-2026-08-01}
+    EVAL_SINCE:  ${EVAL_SINCE:-2026-08-01}
+    EVAL_UNTIL:  ${EVAL_UNTIL:-2026-09-01}
+    MLFLOW_TRACKING_URI: /opt/airflow/mlruns
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ../data:/opt/airflow/data
+    - ../src:/opt/airflow/src
+    - ../mlruns:/opt/airflow/mlruns
+  depends_on:
+    af-postgres:
+      condition: service_healthy
+
+services:
+  af-postgres:
+    image: postgres:16
+    container_name: af-postgres
+    environment:
+      POSTGRES_USER: ${_AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${_AIRFLOW_DB_PASS:-airflow}
+      POSTGRES_DB: ${_AIRFLOW_DB_NAME:-airflow}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${_AIRFLOW_DB_USER:-airflow}"]
+      interval: 5s
+      retries: 10
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username ${AIRFLOW_ADMIN_USER:-admin} \
+          --password ${AIRFLOW_ADMIN_PASS:-admin} \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    restart: unless-stopped
