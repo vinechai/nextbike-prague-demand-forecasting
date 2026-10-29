@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: int_station_hourly_avg
+    description: "one row per (station, Prague local hour); bikes averaged across all scrapes in that hour"
+    columns:
+      - name: station_uid
+        tests:
+          - not_null
+      - name: hour_local
+        tests:
+          - not_null
+      - name: avg_available
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0

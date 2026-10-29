@@ -1,0 +1,59 @@
+version: 2
+
+models:
+  - name: stg_stations
+    description: "cleaned station list; virtual is_bike rows excluded"
+    columns:
+      - name: station_id
+        tests:
+          - unique
+          - not_null
+      - name: lat
+        tests:
+          - not_null
+      - name: lng
+        tests:
+          - not_null
+
+  - name: stg_station_snapshots
+    description: "cleaned snapshots with hour_local added; negative bike counts dropped"
+    columns:
+      - name: snapshot_id
+        tests:
+          - unique
+          - not_null
+      - name: station_uid
+        tests:
+          - not_null
+      - name: hour_local
+        tests:
+          - not_null
+      - name: bikes_available_to_rent
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 200
+
+  - name: stg_bike_positions
+    description: "bike stay records with duration_minutes added"
+    columns:
+      - name: position_id
+        tests:
+          - unique
+          - not_null
+      - name: duration_minutes
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: stg_weather_hourly
+    description: "hourly weather with Prague local time column"
+    columns:
+      - name: hour_utc
+        tests:
+          - unique
+          - not_null
+      - name: hour_local
+        tests:
+          - not_null

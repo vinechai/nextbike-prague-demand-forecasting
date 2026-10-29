@@ -1,0 +1,14 @@
+# run dbt with: dbt run --profiles-dir .
+# copy .env.example to .env and set DBT_DB_* vars before running
+nextbike:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_DB_HOST', 'localhost') }}"
+      port: "{{ env_var('DBT_DB_PORT', '5432') | int }}"
+      user: "{{ env_var('DBT_DB_USER', 'nextbike') }}"
+      password: "{{ env_var('DBT_DB_PASS', 'nextbike') }}"
+      dbname: "{{ env_var('DBT_DB_NAME', 'nextbike') }}"
+      schema: dbt_dev
+      threads: 4

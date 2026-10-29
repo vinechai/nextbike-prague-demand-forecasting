@@ -1,0 +1,35 @@
+version: 2
+
+models:
+  - name: mart_station_hourly_features
+    description: >
+      one row per (station, Prague local hour) with time, weather, geo, and lag features.
+      lag columns are row-based window functions and will diverge from features.parquet
+      for stations/periods where scraper gaps exist.
+    columns:
+      - name: station_uid
+        tests:
+          - not_null
+      - name: hour_local
+        tests:
+          - not_null
+      - name: avg_available
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: hour_of_day
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 23
+      - name: dow
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 6
+      - name: month
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 1
+              max_value: 12

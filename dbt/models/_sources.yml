@@ -1,0 +1,69 @@
+version: 2
+
+sources:
+  - name: nextbike
+    database: nextbike
+    schema: public
+    description: "raw tables written by the nextbike scraper and weather fetcher"
+    tables:
+      - name: stations
+        description: "one row per station; is_bike rows are virtual spots for free-floating bikes"
+        columns:
+          - name: uid
+            tests:
+              - unique
+              - not_null
+          - name: name
+            tests:
+              - not_null
+          - name: lat
+            tests:
+              - not_null
+          - name: lng
+            tests:
+              - not_null
+
+      - name: station_snapshots
+        description: "one row per scrape (~10 min), recording bikes at each station"
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          - name: station_uid
+            tests:
+              - not_null
+              - relationships:
+                  to: source('nextbike', 'stations')
+                  field: uid
+          - name: bikes_available_to_rent
+            tests:
+              - not_null
+          - name: scrape_time
+            tests:
+              - not_null
+
+      - name: bike_positions
+        description: "one row per bike stay — first/last scrape the bike was at this station"
+        columns:
+          - name: id
+            tests:
+              - unique
+              - not_null
+          - name: bike_id
+            tests:
+              - not_null
+          - name: station_uid
+            tests:
+              - not_null
+              - relationships:
+                  to: source('nextbike', 'stations')
+                  field: uid
+
+      - name: weather_hourly
+        description: "hourly weather for prague from open-meteo"
+        columns:
+          - name: hour
+            tests:
+              - unique
+              - not_null
