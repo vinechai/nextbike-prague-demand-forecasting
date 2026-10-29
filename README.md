@@ -61,3 +61,9 @@ data/
   feature_cols.json   feature list for inference
 db/schema.sql         postgres schema
 ```
+
+## data engineering extras (branch `de-upgrades`)
+
+- **dbt/** — SQL transformations on the raw postgres tables: 4 source declarations, staging models, hourly aggregation, `mart_station_hourly_features`. `check_mart.py` compares the mart against `features.parquet`. see [dbt/README.md](dbt/README.md).
+- **airflow/** — weekly retrain DAG: fetch_weather → build_features → train_candidate → evaluate → promote if better. never overwrites `data/model.lgb` automatically. see [airflow/README.md](airflow/README.md).
+- **lakehouse/** — PySpark / Delta Lake bronze/silver/gold pipeline. learning exercise — the dataset fits in pandas at this scale. requires java 11+. see [lakehouse/README.md](lakehouse/README.md).

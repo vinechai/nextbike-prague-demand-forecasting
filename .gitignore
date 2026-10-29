@@ -8,3 +8,6 @@ __pycache__/
 # large raw training data — keep out of repo
 stations_history.parquet
 bikes_history.parquet
+
+# mlflow run artifacts
+mlruns/
