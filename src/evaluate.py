@@ -19,6 +19,8 @@ import pandas as pd
 
 FEATURE_COLS_FILE = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
 
+_MIN_EVAL_ROWS = 10_000   # fewer rows means the time window is wrong
+
 
 def _load_cols() -> list[str]:
     with open(FEATURE_COLS_FILE) as f:
@@ -32,39 +34,71 @@ def evaluate(
     since: str,
     until: str,
 ) -> dict:
-    """returns {"candidate_mae", "reference_mae", "is_better", "delta"}."""
+    """returns {"candidate_mae", "candidate_r2", "reference_mae", "reference_r2", "is_better", "delta"}."""
     cols = _load_cols()
 
     df = pd.read_parquet(features_path)
     df["hour_local"] = pd.to_datetime(df.get("hour_local", df.get("hour", None)))
     window = df[(df["hour_local"] >= since) & (df["hour_local"] < until)].copy()
+    window = window.dropna(subset=["avg_available"])
 
-    if window.empty:
-        raise ValueError(f"no rows in [{since}, {until}) — check features file")
+    print(
+        f"[evaluate] eval [{since}, {until}): {len(window):,} rows, "
+        f"{window['station_uid'].nunique()} stations, "
+        f"range {window['hour_local'].min()} to {window['hour_local'].max()}"
+    )
+
+    if len(window) < _MIN_EVAL_ROWS:
+        raise ValueError(
+            f"eval set too small: {len(window):,} rows < {_MIN_EVAL_ROWS:,} minimum. "
+            f"features file covers {df['hour_local'].min()} to {df['hour_local'].max()}. "
+            f"build_features must cover both TRAIN_SINCE and EVAL_UNTIL."
+        )
 
     present = [c for c in cols if c in window.columns]
+    missing = [c for c in cols if c not in window.columns]
+    if missing:
+        print(f"[evaluate] missing features (NaN): {missing}")
+
     X = window[present]
-    y = window["avg_available"]
+    y = window["avg_available"].values
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+
+    def _metrics(pred):
+        mae = float(np.abs(pred - y).mean())
+        r2  = float(1.0 - np.sum((pred - y) ** 2) / ss_tot)
+        return mae, r2
 
     cand = lgb.Booster(model_file=candidate_path)
     ref  = lgb.Booster(model_file=reference_path)
 
-    cand_mae = float(np.abs(cand.predict(X) - y).mean())
-    ref_mae  = float(np.abs(ref.predict(X)  - y).mean())
-    delta    = ref_mae - cand_mae   # positive means candidate is better
+    cand_mae, cand_r2 = _metrics(cand.predict(X))
+    ref_mae,  ref_r2  = _metrics(ref.predict(X))
+    delta = ref_mae - cand_mae   # positive = candidate is better
+
+    # naive baselines
+    for lag_col in ("lag_24h", "lag_168h"):
+        if lag_col in window.columns:
+            vals = window[lag_col].values
+            mask = ~np.isnan(vals)
+            if mask.any():
+                b_mae = float(np.abs(vals[mask] - y[mask]).mean())
+                b_r2  = float(1.0 - np.sum((vals[mask] - y[mask])**2) /
+                              np.sum((y[mask] - y[mask].mean())**2))
+                print(f"[evaluate] naive {lag_col}: MAE={b_mae:.4f}  R2={b_r2:.4f}  (n={mask.sum():,})")
 
     result = {
         "candidate_mae": round(cand_mae, 4),
+        "candidate_r2":  round(cand_r2,  4),
         "reference_mae": round(ref_mae,  4),
+        "reference_r2":  round(ref_r2,   4),
         "is_better":     bool(cand_mae < ref_mae),
         "delta":         round(delta, 4),
     }
 
     status = "BETTER" if result["is_better"] else "WORSE"
-    print(
-        f"[evaluate] candidate MAE={cand_mae:.4f}  reference MAE={ref_mae:.4f}"
-        f"  → {status} by {abs(delta):.4f}"
-    )
+    print(f"[evaluate] candidate: MAE={cand_mae:.4f}  R2={cand_r2:.4f}")
+    print(f"[evaluate] reference: MAE={ref_mae:.4f}  R2={ref_r2:.4f}  -> candidate {status} by {abs(delta):.4f}")
     return result
 
 

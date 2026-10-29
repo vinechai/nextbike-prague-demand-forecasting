@@ -70,7 +70,8 @@ def _build_features(**ctx):
     from src.features import build_features
 
     out = os.path.join(_DATA_DIR, "features_candidate.parquet")
-    df = build_features(since=_SINCE, until=_UNTIL, geo_parquet=_GEO_PARQUET)
+    # build features for the full TRAIN+EVAL window so evaluate has real rows
+    df = build_features(since=_SINCE, until=_EVAL_UNTIL, geo_parquet=_GEO_PARQUET)
     df.to_parquet(out, index=False)
     print(f"[build_features] saved {len(df):,} rows → {out}")
     return out

@@ -110,8 +110,11 @@ def _add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
         shifted["hour_local"] = shifted["hour_local"] + timedelta(hours=offset_h)
         shifted = shifted.rename(columns={"avg_available": col})
         df = df.merge(shifted, on=["station_uid", "hour_local"], how="left")
+    # lag_24h_ratio: matches the inference API formula (lag_24h / station_mean + 0.1).
+    # using per-station mean of lag_24h (no target in numerator) avoids training-inference skew.
     with np.errstate(invalid="ignore"):
-        df["lag_24h_ratio"] = (df["avg_available"] - df["lag_24h"]) / (df["lag_24h"] + 1)
+        station_mean = df.groupby("station_uid")["avg_available"].transform("mean")
+        df["lag_24h_ratio"] = df["lag_24h"] / (station_mean + 0.1)
     return df
 
 
