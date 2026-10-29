@@ -1,9 +1,8 @@
 -- mart: one row per (station, Prague local hour) with time, weather, geo, and lag features
 --
--- lag columns use SQL window functions (lag by N rows).
--- if there are gaps in the hourly series (scraper outages), these will differ from
--- features.parquet which uses an explicit time-offset join to handle gaps.
--- the check_mart.py script reports the size of that difference.
+-- lag features use timestamp self-joins (not row-based window functions).
+-- if there is no row for exactly 24/48/168 hours earlier (scraper gap), the join
+-- returns NULL — which is honest. row-based lag() would silently return the wrong row.
 with hourly as (
     select * from {{ ref('int_station_hourly_avg') }}
 ),
@@ -31,13 +30,21 @@ time_features as (
         extract(month from h.hour_local)::integer as month,
         case when extract(dow from h.hour_local) in (0, 6) then 1 else 0 end as is_weekend,
 
-        -- lag features via window function (row-based, not time-based — see note above)
-        lag(h.avg_available, 24)  over w as lag_24h,
-        lag(h.avg_available, 48)  over w as lag_48h,
-        lag(h.avg_available, 168) over w as lag_168h
+        -- lag features via timestamp join — NULL when the hour is missing (correct for gaps)
+        lag24.avg_available  as lag_24h,
+        lag48.avg_available  as lag_48h,
+        lag168.avg_available as lag_168h
 
     from hourly h
-    window w as (partition by h.station_uid order by h.hour_local)
+    left join hourly lag24
+        on  lag24.station_uid = h.station_uid
+        and lag24.hour_local  = h.hour_local - interval '24 hours'
+    left join hourly lag48
+        on  lag48.station_uid = h.station_uid
+        and lag48.hour_local  = h.hour_local - interval '48 hours'
+    left join hourly lag168
+        on  lag168.station_uid = h.station_uid
+        and lag168.hour_local  = h.hour_local - interval '168 hours'
 ),
 
 joined as (

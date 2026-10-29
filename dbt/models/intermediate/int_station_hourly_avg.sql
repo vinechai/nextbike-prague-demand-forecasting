@@ -1,5 +1,12 @@
+{{
+    config(
+        materialized = 'table',
+        post_hook = "CREATE INDEX IF NOT EXISTS {{ this.name }}_uid_hour
+                     ON {{ this }} (station_uid, hour_local)"
+    )
+}}
 -- aggregate scraper snapshots to one row per (station, hour)
--- multiple snapshots fall in the same hour, so we average them
+-- materialized as a table so the lag self-joins in the mart are fast
 with snapshots as (
     select * from {{ ref('stg_station_snapshots') }}
 ),
