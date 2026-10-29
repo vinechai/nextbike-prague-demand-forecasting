@@ -63,22 +63,38 @@ def _fetch_weather(**ctx):
 
 
 def _build_features(**ctx):
-    """query db and build a candidate features parquet."""
+    """build two parquet files: train window and eval window.
+
+    builds them separately to avoid OOM: each window stays ~300-400k rows, which
+    is manageable. the eval build queries from (EVAL_SINCE - 7 days) so lag_168h
+    has enough lookback for rows right at the eval window start.
+    """
     import sys
+    from datetime import timedelta as _td
     sys.path.insert(0, "/opt/airflow")
 
     from src.features import build_features
 
-    out = os.path.join(_DATA_DIR, "features_candidate.parquet")
-    # build features for the full TRAIN+EVAL window so evaluate has real rows
-    df = build_features(since=_SINCE, until=_EVAL_UNTIL, geo_parquet=_GEO_PARQUET)
-    df.to_parquet(out, index=False)
-    print(f"[build_features] saved {len(df):,} rows → {out}")
-    return out
+    # training features
+    train_out = os.path.join(_DATA_DIR, "features_train.parquet")
+    train_df = build_features(since=_SINCE, until=_UNTIL, geo_parquet=_GEO_PARQUET)
+    train_df.to_parquet(train_out, index=False)
+    print(f"[build_features] train: {len(train_df):,} rows -> {train_out}")
+    del train_df
+
+    # eval features — query from 7 days before eval_since for lag lookback
+    import pandas as _pd
+    eval_start = str((_pd.Timestamp(_EVAL_SINCE) - _td(days=7)).date())
+    eval_out = os.path.join(_DATA_DIR, "features_eval.parquet")
+    eval_df = build_features(since=eval_start, until=_EVAL_UNTIL, geo_parquet=_GEO_PARQUET)
+    eval_df.to_parquet(eval_out, index=False)
+    print(f"[build_features] eval: {len(eval_df):,} rows -> {eval_out}")
+
+    return train_out
 
 
 def _train_candidate(**ctx):
-    """train a lightgbm model on features_candidate.parquet."""
+    """train a lightgbm model on features_train.parquet."""
     import sys
     sys.path.insert(0, "/opt/airflow")
 
@@ -87,7 +103,7 @@ def _train_candidate(**ctx):
     run_date = ctx["ds_nodash"]   # e.g. "20261029"
     os.makedirs(_MODELS_DIR, exist_ok=True)
     out = os.path.join(_MODELS_DIR, f"model_{run_date}.lgb")
-    features_path = os.path.join(_DATA_DIR, "features_candidate.parquet")
+    features_path = os.path.join(_DATA_DIR, "features_train.parquet")
 
     result = train(
         features_path=features_path,
@@ -115,7 +131,7 @@ def _evaluate(**ctx):
         ti.xcom_push(key="is_better", value=True)
         return
 
-    features_path = os.path.join(_DATA_DIR, "features_candidate.parquet")
+    features_path = os.path.join(_DATA_DIR, "features_eval.parquet")
     result = evaluate(
         candidate_path=candidate,
         reference_path=_REF_MODEL,
