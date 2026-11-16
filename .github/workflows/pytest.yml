@@ -1,0 +1,84 @@
+name: pytest
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB:       nextbike
+          POSTGRES_USER:     nextbike
+          POSTGRES_PASSWORD: nextbike
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_HOST:     localhost
+      DB_PORT:     5432
+      DB_USER:     nextbike
+      DB_PASSWORD: nextbike
+      DB_NAME:     nextbike
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: set up python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: install dependencies
+        run: pip install -r requirements.txt
+
+      - name: create minimal schema
+        run: |
+          psql postgresql://nextbike:nextbike@localhost:5432/nextbike -c "
+            CREATE TABLE IF NOT EXISTS stations (
+              uid BIGINT PRIMARY KEY,
+              name TEXT,
+              lat DOUBLE PRECISION,
+              lng DOUBLE PRECISION,
+              bike_racks INT,
+              is_spot BOOLEAN DEFAULT TRUE
+            );
+            CREATE TABLE IF NOT EXISTS station_snapshots (
+              id BIGSERIAL PRIMARY KEY,
+              station_uid BIGINT,
+              scrape_time TIMESTAMPTZ,
+              bikes_available_to_rent INT
+            );
+            CREATE TABLE IF NOT EXISTS bike_positions (
+              id BIGSERIAL PRIMARY KEY,
+              bike_id BIGINT,
+              station_uid BIGINT,
+              first_seen_at TIMESTAMPTZ,
+              last_seen_at TIMESTAMPTZ
+            );
+            CREATE TABLE IF NOT EXISTS weather_hourly (
+              hour TIMESTAMPTZ PRIMARY KEY,
+              temperature DOUBLE PRECISION,
+              precipitation DOUBLE PRECISION,
+              windspeed DOUBLE PRECISION,
+              weathercode INT,
+              snowfall DOUBLE PRECISION,
+              shortwave_radiation DOUBLE PRECISION,
+              tsun DOUBLE PRECISION
+            );
+          "
+
+      - name: run tests
+        run: pytest tests/ -v --tb=short

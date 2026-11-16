@@ -18,10 +18,10 @@ models/
     mart_station_hourly_features.sql  full feature table (see note on lags below)
 ```
 
-**lag note**: lag columns in the mart use SQL `lag(n)` (row-based).
-if there are gaps in the hourly series due to scraper outages, they differ from
-`features.parquet` which uses explicit time-offset joins. `check_mart.py` reports
-the difference.
+**lag note**: lag columns in the mart use timestamp self-joins
+(`lag24.hour_local = h.hour_local - interval '24 hours'`), not row-based `lag(n)`.
+this matches `src/features.py` and handles scraper gaps correctly — a gap produces
+NaN instead of silently returning the wrong hour's value. see `docs/DBT_GUIDE.md`.
 
 ## setup
 

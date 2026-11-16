@@ -11,3 +11,6 @@ bikes_history.parquet
 
 # mlflow run artifacts
 mlruns/
+
+# dbt connection settings — may contain local passwords; recreate from profiles.yml.example
+dbt/profiles.yml

@@ -1,5 +1,5 @@
 # run dbt with: dbt run --profiles-dir .
-# copy .env.example to .env and set DBT_DB_* vars before running
+# copy this file to profiles.yml and set the env vars listed below (or override here for local use)
 nextbike:
   target: dev
   outputs:
