@@ -13,8 +13,9 @@ to test locally (without docker):
 
 import os
 import shutil
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+import pendulum
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
@@ -68,25 +69,39 @@ def _build_features(**ctx):
     builds them separately to avoid OOM: each window stays ~300-400k rows, which
     is manageable. the eval build queries from (EVAL_SINCE - 7 days) so lag_168h
     has enough lookback for rows right at the eval window start.
+
+    station stats (station_mean_avail, avail_std, reb_per_week) are extracted from
+    the training window and passed to the eval build so that eval features use
+    training-window stats, not eval-window stats (which would be leakage).
     """
     import sys
     from datetime import timedelta as _td
     sys.path.insert(0, "/opt/airflow")
 
-    from src.features import build_features
+    from src.features import build_features, extract_station_stats_from_df
 
     # training features
     train_out = os.path.join(_DATA_DIR, "features_train.parquet")
     train_df = build_features(since=_SINCE, until=_UNTIL, geo_parquet=_GEO_PARQUET)
     train_df.to_parquet(train_out, index=False)
     print(f"[build_features] train: {len(train_df):,} rows -> {train_out}")
+
+    # extract training stats before freeing memory — eval features must use these
+    train_stats = extract_station_stats_from_df(train_df)
     del train_df
 
     # eval features — query from 7 days before eval_since for lag lookback
+    # pass training stats so lag_24h_ratio and avail_std/reb_per_week are not
+    # computed from the eval window (which would leak eval-period information)
     import pandas as _pd
     eval_start = str((_pd.Timestamp(_EVAL_SINCE) - _td(days=7)).date())
     eval_out = os.path.join(_DATA_DIR, "features_eval.parquet")
-    eval_df = build_features(since=eval_start, until=_EVAL_UNTIL, geo_parquet=_GEO_PARQUET)
+    eval_df = build_features(
+        since=eval_start,
+        until=_EVAL_UNTIL,
+        geo_parquet=_GEO_PARQUET,
+        precomputed_stats=train_stats,
+    )
     eval_df.to_parquet(eval_out, index=False)
     print(f"[build_features] eval: {len(eval_df):,} rows -> {eval_out}")
 
@@ -145,6 +160,9 @@ def _evaluate(**ctx):
 
 
 def _branch_promote(**ctx):
+    # promote only if candidate beats BOTH the reference model AND the naive lag_24h baseline.
+    # beating the reference alone is not enough — a model that can't beat "use yesterday's value"
+    # adds no value in production.
     is_better = ctx["ti"].xcom_pull(task_ids="evaluate", key="is_better")
     return "promote" if is_better else "skip_promote"
 
@@ -169,10 +187,12 @@ def _promote(**ctx):
 with DAG(
     dag_id="retrain_pipeline",
     default_args=default_args,
-    description="fetch weather → build features → train → evaluate → promote if better",
-    schedule="0 3 * * 1",   # mondays at 03:00 UTC
-    start_date=datetime(2026, 10, 1),
+    description="fetch weather -> build features -> train -> evaluate -> promote if better",
+    schedule="0 13 * * 1",   # mondays at 13:00 Europe/Prague
+    start_date=pendulum.datetime(2026, 10, 1, tz="Europe/Prague"),
     catchup=False,
+    max_active_runs=1,
+    is_paused_upon_creation=True,
     tags=["nextbike", "ml"],
 ) as dag:
 

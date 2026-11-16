@@ -3,6 +3,7 @@ loads model and station metadata once at startup.
 builds feature vectors on request and runs inference.
 """
 
+import hashlib
 import json
 import re
 import pathlib
@@ -27,11 +28,12 @@ try:
 except ImportError:
     _HAS_HOLIDAYS = False
 
-DATA_DIR      = pathlib.Path(__file__).parent.parent / "data"
-MODEL_PATH    = DATA_DIR / "model.lgb"
-FEAT_PATH     = DATA_DIR / "feature_cols.json"
-GEO_PATH      = DATA_DIR / "station_geo.parquet"
-FEATURES_PATH = DATA_DIR / "features.parquet"
+DATA_DIR           = pathlib.Path(__file__).parent.parent / "data"
+MODEL_PATH         = DATA_DIR / "model.lgb"
+FEAT_PATH          = DATA_DIR / "feature_cols.json"
+GEO_PATH           = DATA_DIR / "station_geo.parquet"
+FEATURES_PATH      = DATA_DIR / "features.parquet"
+STATION_STATS_PATH = pathlib.Path(str(MODEL_PATH).replace(".lgb", "_station_stats.json"))
 
 _GEO_PREFIXES  = ("dist_", "n_metro", "n_tram", "n_cafe", "n_park", "n_office", "elevation")
 _WEATHER_COLS  = ("temperature", "precipitation", "windspeed", "weathercode", "snowfall",
@@ -180,40 +182,69 @@ class Predictor:
         self.stations: pd.DataFrame = df.set_index("station_uid")
 
     def _load_lag_baseline(self) -> None:
-        """load historical medians and station-level stats from features.parquet."""
-        if not FEATURES_PATH.exists():
-            self._lag_baseline: dict = {}
-            self._station_stats: dict = {}
-            self._active_uids: set = set()
-            return
-        # load only needed columns; fall back if optional ones are absent
-        try:
-            df = pd.read_parquet(
-                FEATURES_PATH,
-                columns=["station_uid", "hour_of_day", "dow", "avg_available",
-                         "reb_per_week", "avail_std"],
-            )
-        except Exception:
-            df = pd.read_parquet(
-                FEATURES_PATH,
-                columns=["station_uid", "hour_of_day", "dow", "avg_available"],
-            )
-            df["reb_per_week"] = np.nan
-            df["avail_std"]    = np.nan
+        """load historical medians and station-level stats at startup.
 
-        self._lag_baseline = (
-            df.groupby(["station_uid", "hour_of_day", "dow"])["avg_available"]
-            .median()
-            .to_dict()
-        )
-        # station-level stats: stable characteristics used at inference time
-        agg = df.groupby("station_uid").agg(
-            avail_std=("avail_std", "mean"),
-            reb_per_week=("reb_per_week", "median"),
-            station_mean_avail=("avg_available", "mean"),
-        )
-        self._station_stats: dict = agg.to_dict(orient="index")
-        self._active_uids: set = set(df["station_uid"].unique())
+        lag baseline (hourly medians for fallback) always comes from features.parquet.
+        station stats (avail_std, reb_per_week, station_mean_avail) prefer the
+        _station_stats.json file saved by train.py; fall back to features.parquet
+        for models trained before this change.
+        """
+        self._lag_baseline: dict = {}
+        self._station_stats: dict = {}
+        self._active_uids: set = set()
+
+        if FEATURES_PATH.exists():
+            try:
+                df = pd.read_parquet(
+                    FEATURES_PATH,
+                    columns=["station_uid", "hour_of_day", "dow", "avg_available"],
+                )
+                self._lag_baseline = (
+                    df.groupby(["station_uid", "hour_of_day", "dow"])["avg_available"]
+                    .median()
+                    .to_dict()
+                )
+                self._active_uids = set(df["station_uid"].unique())
+            except Exception:
+                pass
+
+        # station stats: prefer JSON saved by train.py (training-window only, no leakage)
+        if STATION_STATS_PATH.exists():
+            with open(STATION_STATS_PATH) as f:
+                raw = json.load(f)
+            # verify the stats file was produced from this exact model binary
+            stored_hash = raw.pop("_model_hash", None)
+            if stored_hash is not None:
+                model_hash = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()[:16]
+                if stored_hash != model_hash:
+                    raise RuntimeError(
+                        f"station stats file {STATION_STATS_PATH.name!r} does not match "
+                        f"model {MODEL_PATH.name!r}: "
+                        f"stats were built for model hash {stored_hash!r}, "
+                        f"current model hash is {model_hash!r}. "
+                        "Run src/train.py again or delete the stats file to fall back to features.parquet."
+                    )
+            self._station_stats = {int(k): v for k, v in raw.items()}
+            # if features.parquet was absent, populate active_uids from stats
+            if not self._active_uids:
+                self._active_uids = set(self._station_stats.keys())
+        elif FEATURES_PATH.exists():
+            # backward compat: compute stats from features.parquet for older models
+            try:
+                df2 = pd.read_parquet(
+                    FEATURES_PATH,
+                    columns=["station_uid", "avg_available", "reb_per_week", "avail_std"],
+                )
+            except Exception:
+                df2 = pd.read_parquet(FEATURES_PATH, columns=["station_uid", "avg_available"])
+                df2["reb_per_week"] = np.nan
+                df2["avail_std"]    = np.nan
+            agg = df2.groupby("station_uid").agg(
+                avail_std=("avail_std", "mean"),
+                reb_per_week=("reb_per_week", "median"),
+                station_mean_avail=("avg_available", "mean"),
+            )
+            self._station_stats = agg.to_dict(orient="index")
 
     # ── DB helpers ────────────────────────────────────────────────────────────
 
@@ -327,7 +358,7 @@ class Predictor:
                     stats AS (
                         SELECT station_uid,
                                AVG(CASE WHEN avg_bikes < 0.5 THEN 1.0 ELSE 0.0 END) AS zero_rate,
-                               AVG(CASE WHEN avg_bikes < 1.5 THEN 1.0 ELSE 0.0 END) AS near_zero_rate
+                               AVG(CASE WHEN avg_bikes < 1.0 THEN 1.0 ELSE 0.0 END) AS near_zero_rate
                         FROM hourly
                         GROUP BY station_uid
                     ),

@@ -8,9 +8,11 @@ usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 
 import lightgbm as lgb
 import mlflow
@@ -19,20 +21,20 @@ import pandas as pd
 
 FEATURE_COLS_FILE = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
 
-# same params as production model (from notebook 03)
+# matches notebook 03 final Optuna params (40 trials, val MAE objective)
 _LGB_PARAMS = {
-    "objective":        "mae",
-    "n_estimators":     2000,
-    "learning_rate":    0.05,
-    "num_leaves":       127,
-    "min_child_samples": 50,
-    "subsample":        0.8,
-    "colsample_bytree": 0.8,
-    "reg_alpha":        0.1,
-    "reg_lambda":       1.0,
-    "random_state":     42,
-    "n_jobs":           -1,
-    "verbosity":        -1,
+    "objective":         "regression_l1",
+    "n_estimators":      1000,
+    "learning_rate":     0.034,
+    "num_leaves":        94,
+    "min_child_samples": 72,
+    "subsample":         0.747,
+    "colsample_bytree":  0.554,
+    "reg_lambda":        9.61,
+    "reg_alpha":         0.0017,
+    "random_state":      42,
+    "n_jobs":            -1,
+    "verbosity":         -1,
 }
 
 
@@ -73,6 +75,18 @@ def train(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+    # station list — saved before training so it can be used by evaluate/promote
+    from src.features import extract_station_stats_from_df
+    station_uids = sorted(int(s) for s in train_df["station_uid"].unique())
+    station_list_path = output_path.replace(".lgb", "_stations.json")
+    with open(station_list_path, "w") as _f:
+        json.dump(station_uids, _f)
+    print(f"[train] {len(station_uids):,} stations -> {station_list_path}")
+
+    # pre-compute per-station stats from training data before model training
+    # (extract_station_stats_from_df needs train_df which has avail_std/reb_per_week columns)
+    station_stats = extract_station_stats_from_df(train_df)
+
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "mlruns"))
     mlflow.set_experiment("nextbike_retrain")   # creates experiment dir if first run
     with mlflow.start_run(run_name=mlflow_run_name or "train_candidate"):
@@ -93,7 +107,20 @@ def train(
 
         mlflow.log_artifact(output_path)
 
-    return {"output": output_path, "train_mae": train_mae, "val_mae": val_mae}
+    # save station stats after model is written so we can embed its hash
+    model_hash = hashlib.sha256(Path(output_path).read_bytes()).hexdigest()[:16]
+    station_stats["_model_hash"] = model_hash
+    stats_path = output_path.replace(".lgb", "_station_stats.json")
+    with open(stats_path, "w") as _f:
+        json.dump(station_stats, _f)
+    print(f"[train] station stats (model_hash={model_hash}) -> {stats_path}")
+
+    return {
+        "output":      output_path,
+        "stats_path":  stats_path,
+        "train_mae":   train_mae,
+        "val_mae":     val_mae,
+    }
 
 
 if __name__ == "__main__":

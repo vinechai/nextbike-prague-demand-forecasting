@@ -17,13 +17,12 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-FEATURE_COLS_FILE = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
-
 _MIN_EVAL_ROWS = 10_000   # fewer rows means the time window is wrong
 
 
 def _load_cols() -> list[str]:
-    with open(FEATURE_COLS_FILE) as f:
+    cols_file = os.environ.get("FEATURE_COLS_FILE", "data/feature_cols.json")
+    with open(cols_file) as f:
         return json.load(f)
 
 
@@ -87,18 +86,38 @@ def evaluate(
                               np.sum((y[mask] - y[mask].mean())**2))
                 print(f"[evaluate] naive {lag_col}: MAE={b_mae:.4f}  R2={b_r2:.4f}  (n={mask.sum():,})")
 
+    # naive lag_24h baseline MAE (used by promotion rule)
+    naive_lag24_mae = None
+    if "lag_24h" in window.columns:
+        vals = window["lag_24h"].values
+        mask = ~np.isnan(vals)
+        if mask.any():
+            naive_lag24_mae = float(np.abs(vals[mask] - y[mask]).mean())
+
+    # beats_reference: lower MAE than data/model.lgb
+    # beats_naive: lower MAE than naive lag_24h (sanity floor — if we can't beat yesterday, don't promote)
+    beats_reference = bool(cand_mae < ref_mae)
+    beats_naive     = (naive_lag24_mae is None) or bool(cand_mae < naive_lag24_mae)
+    is_better       = beats_reference and beats_naive
+
     result = {
-        "candidate_mae": round(cand_mae, 4),
-        "candidate_r2":  round(cand_r2,  4),
-        "reference_mae": round(ref_mae,  4),
-        "reference_r2":  round(ref_r2,   4),
-        "is_better":     bool(cand_mae < ref_mae),
-        "delta":         round(delta, 4),
+        "candidate_mae":    round(cand_mae, 4),
+        "candidate_r2":     round(cand_r2,  4),
+        "reference_mae":    round(ref_mae,  4),
+        "reference_r2":     round(ref_r2,   4),
+        "naive_lag24_mae":  round(naive_lag24_mae, 4) if naive_lag24_mae is not None else None,
+        "beats_reference":  beats_reference,
+        "beats_naive":      beats_naive,
+        "is_better":        is_better,
+        "delta":            round(delta, 4),
     }
 
-    status = "BETTER" if result["is_better"] else "WORSE"
-    print(f"[evaluate] candidate: MAE={cand_mae:.4f}  R2={cand_r2:.4f}")
-    print(f"[evaluate] reference: MAE={ref_mae:.4f}  R2={ref_r2:.4f}  -> candidate {status} by {abs(delta):.4f}")
+    status = "BETTER" if is_better else "WORSE"
+    print(f"[evaluate] candidate:      MAE={cand_mae:.4f}  R2={cand_r2:.4f}")
+    print(f"[evaluate] reference:      MAE={ref_mae:.4f}  R2={ref_r2:.4f}  beats_reference={beats_reference}")
+    if naive_lag24_mae is not None:
+        print(f"[evaluate] naive lag_24h:  MAE={naive_lag24_mae:.4f}  beats_naive={beats_naive}")
+    print(f"[evaluate] promote? {is_better} (must beat BOTH reference AND naive lag_24h)")
     return result
 
 

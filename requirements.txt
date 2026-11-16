@@ -11,6 +11,8 @@ numpy
 lightgbm
 xgboost
 scikit-learn
+pytest
+mlflow
 fastapi
 uvicorn[standard]
 pytz
